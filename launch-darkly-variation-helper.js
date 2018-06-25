@@ -1,3 +1,4 @@
+/* eslint-env node */
 const MODULE_NAME = 'ember-launch-darkly';
 const MEMBER_NAME = 'variation';
 const SERVICE_PROPERTY_NAME = 'launchDarkly';
@@ -16,35 +17,34 @@ function _assertName(path, value) {
   return path.node.name === value;
 }
 
-module.exports = function launchDarklyVariationHelperPlugin({ types: t }) {
-  return {
-    name: 'launch-darkly-variation-helper',
+module.exports = function launchDarklyVariationHelperPlugin({ Plugin, types: t }) {
+  return new Plugin('launch-darkly-variation-helper', {
     visitor: {
       Program: {
-        enter(path, state) {
-          let variationImport = _findVariationHelperImport(path, t);
+        enter(node, parent, scope, file) {
+          let variationImport = _findVariationHelperImport(this, t);
 
           if (variationImport && _isReferenced(variationImport, t)) {
-            state.variationHelperReferenced = true;
+            file.variationHelperReferenced = true;
           }
         },
 
-        exit(path, state) {
-          let variationImport = _findVariationHelperImport(path, t);
+        exit(node, parent, scope, file) {
+          let variationImport = _findVariationHelperImport(this, t);
 
           if (variationImport) {
             _removeSpecifierOrImport(variationImport, t);
 
-            if (state.variationHelperReferenced) {
-              _insertServiceImport(path, t);
+            if (file.variationHelperReferenced) {
+              _insertServiceImport(this, t);
             }
           }
         }
       },
 
-      Identifier(path, state) {
-        if (path.referencesImport(MODULE_NAME, MEMBER_NAME)) {
-          let parentCallExpression = path.findParent(p => t.isCallExpression(p));
+      Identifier(/* node, parent, scope, file */) {
+        if (this.referencesImport(MODULE_NAME, MEMBER_NAME)) {
+          let parentCallExpression = this.findParent(p => t.isCallExpression(p));
           let key = parentCallExpression.get('arguments.0').node.value;
           parentCallExpression.replaceWith(_build(key, t));
 
@@ -55,7 +55,7 @@ module.exports = function launchDarklyVariationHelperPlugin({ types: t }) {
               let dependentKey = `${SERVICE_PROPERTY_NAME}.${key}`;
 
               if (_shouldInjectDependentKey(key, parent, t)) {
-                parent.node.arguments.unshift(t.stringLiteral(dependentKey));
+                parent.node.arguments.unshift(t.literal(dependentKey));
               }
 
               let fn = parent.get('arguments').find(a => t.isFunctionExpression(a));
@@ -74,13 +74,13 @@ module.exports = function launchDarklyVariationHelperPlugin({ types: t }) {
         }
       },
 
-      CallExpression(path, state) {
-        if (state.variationHelperReferenced) {
-          _insertServiceInjection(path, t);
+      CallExpression(node, parent, scope, file) {
+        if (file.variationHelperReferenced) {
+          _insertServiceInjection(this, t);
         }
       }
     }
-  };
+  });
 }
 
 module.exports.baseDir = function() { return __dirname };
@@ -106,7 +106,7 @@ function _findParent(path, t) {
     return { parent: parentComputed, type: 'computed-property' }
   }
 
-  let parentObjectMethod = path.findParent(p => t.isObjectMethod(p) || t.isFunctionExpression(p));
+  let parentObjectMethod = path.findParent(p => t.isFunctionExpression(p));
 
   if (parentObjectMethod) {
     return { parent: parentObjectMethod, type: 'function' };
@@ -133,7 +133,7 @@ function _referencesComputedDeclaration(path) {
 
 function _buildServiceDeclaration(t) {
   let memberExpression = t.memberExpression(t.thisExpression(), t.identifier('get'));
-  let callExpression = t.callExpression(memberExpression, [t.stringLiteral(SERVICE_PROPERTY_NAME)]);
+  let callExpression = t.callExpression(memberExpression, [t.literal(SERVICE_PROPERTY_NAME)]);
   let variableDeclarator = t.variableDeclarator(t.identifier(SERVICE_VARIABLE_NAME), callExpression);
   return t.variableDeclaration('const', [variableDeclarator]);
 }
@@ -165,9 +165,9 @@ function _isReferenced(path, t) {
 
 function _removeSpecifierOrImport(path, t) {
   if (path.get('specifiers').length > 1) {
-    _importSpecifier(path, t).remove();
+    _importSpecifier(path, t).dangerouslyRemove();
   } else {
-    path.remove();
+    path.dangerouslyRemove();
   }
 }
 
@@ -177,7 +177,7 @@ function _insertServiceImport(path, t) {
 
 function _buildServiceImport(t) {
   var specifier = t.importSpecifier(t.identifier(SERVICE_INJECTION_FUNCTION_NAME), t.identifier('default'));
-  return t.importDeclaration([specifier], t.stringLiteral('ember-service/inject'));
+  return t.importDeclaration([specifier], t.literal('ember-service/inject'));
 }
 
 function _insertServiceInjection(path, t) {
@@ -197,7 +197,8 @@ function _insertServiceInjection(path, t) {
 }
 
 function _buildServiceInjection(t) {
-  return t.objectProperty(t.identifier(SERVICE_PROPERTY_NAME), t.callExpression(t.identifier(SERVICE_INJECTION_FUNCTION_NAME), []));
+  return t.property(SERVICE_PROPERTY_NAME, t.identifier(SERVICE_PROPERTY_NAME), t.callExpression(t.identifier(SERVICE_INJECTION_FUNCTION_NAME), []));
+  // return t.objectProperty(t.identifier(SERVICE_PROPERTY_NAME), t.callExpression(t.identifier(SERVICE_INJECTION_FUNCTION_NAME), []));
 }
 
 
@@ -213,7 +214,7 @@ function _containsServiceDeclaration(path, t) {
 
 function _shouldInjectDependentKey(key, path, t) {
   let found = path.get('arguments').find(a => {
-    return t.isStringLiteral(a) && _containsDependentKey(key, a.node.value);
+    return t.isLiteral(a) && _containsDependentKey(key, a.node.value);
   });
 
   return !found;
@@ -228,5 +229,5 @@ function _containsDependentKey(key, value) {
 }
 
 function _build(key, t) {
-  return t.callExpression(t.memberExpression(t.identifier(SERVICE_VARIABLE_NAME), t.identifier('get')), [t.stringLiteral(key)]);
+  return t.callExpression(t.memberExpression(t.identifier(SERVICE_VARIABLE_NAME), t.identifier('get')), [t.literal(key)]);
 }
