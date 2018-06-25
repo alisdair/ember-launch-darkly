@@ -60,5 +60,9 @@ export default Service.extend(Evented, {
     let config = appConfig.launchDarkly || {};
 
     return assign({}, config);
-  }
+  },
+
+  willDestroy() {
+    delete window.ld;
+  },
 });
